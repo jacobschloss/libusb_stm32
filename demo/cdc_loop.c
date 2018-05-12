@@ -26,9 +26,10 @@
 #define CDC_DATA_SZ     0x40
 #define CDC_NTF_EP      0x83
 #define CDC_NTF_SZ      0x08
-#define CDC_LOOPBACK
 
-//#define CDC_USE_IRQ   /* uncomment to build interrupt-based demo */
+#define CDC_LOOPBACK
+//#define CDC_USE_IRQ   /* interrupt-based demo */
+//#define CDC_USE_ASYNC   /* process data endpoints in main loop w/o callbacks */
 
 struct cdc_config {
     struct usb_config_descriptor        config;
@@ -156,9 +157,9 @@ static const struct usb_string_descriptor *const dtable[] = {
 };
 
 usbd_device udev;
-uint32_t	ubuf[0x20];
+uint32_t    ubuf[0x20];
 uint8_t     fifo[0x200];
-uint32_t    fpos = 0;
+int32_t     fpos = 0;
 
 static struct usb_cdc_line_coding cdc_line = {
     .dwDTERate          = 38400,
@@ -228,21 +229,28 @@ static void cdc_txonly(usbd_device *dev, uint8_t event, uint8_t ep) {
 }
 
 static void cdc_loopback(usbd_device *dev, uint8_t event, uint8_t ep) {
+    static uint8_t rx_delayed = 0;
     int _t;
     switch (event) {
-    case usbd_evt_eptx:
-        _t = usbd_ep_write(dev, CDC_TXD_EP, &fifo[0], (fpos < CDC_DATA_SZ) ? fpos : CDC_DATA_SZ);
-        if (_t > 0) {
-            memmove(&fifo[0], &fifo[_t], fpos - _t);
-            fpos -= _t;
-        }
     case usbd_evt_eprx:
+    force_rx:
         if (fpos < (sizeof(fifo) - CDC_DATA_SZ)) {
             _t = usbd_ep_read(dev, CDC_RXD_EP, &fifo[fpos], CDC_DATA_SZ);
-            if (_t > 0) {
-                fpos += _t;
-            }
+            if (_t > 0) fpos += _t;
+            rx_delayed = 0;
+        } else {
+            /* no space in fifo */
+            rx_delayed = 1;
         }
+    case usbd_evt_eptx:
+        if (fpos == 0) break;    /* nothing to send */
+        _t = usbd_ep_write(dev, CDC_TXD_EP, &fifo[0], (fpos < CDC_DATA_SZ) ? fpos : CDC_DATA_SZ);
+        if (_t > 0) {
+            fpos -= _t;
+            memmove(&fifo[0], &fifo[_t], fpos);
+        }
+        /* receiveing delayed packet */
+        if (rx_delayed) goto force_rx;
     default:
         break;
     }
@@ -263,14 +271,14 @@ static usbd_respond cdc_setconf (usbd_device *dev, uint8_t cfg) {
         usbd_ep_config(dev, CDC_RXD_EP, USB_EPTYPE_BULK | USB_EPTYPE_DBLBUF, CDC_DATA_SZ);
         usbd_ep_config(dev, CDC_TXD_EP, USB_EPTYPE_BULK | USB_EPTYPE_DBLBUF, CDC_DATA_SZ);
         usbd_ep_config(dev, CDC_NTF_EP, USB_EPTYPE_INTERRUPT, CDC_NTF_SZ);
-#if defined(CDC_LOOPBACK)
+#if defined(CDC_LOOPBACK) && !defined(CDC_USE_ASYNC)
         usbd_reg_endpoint(dev, CDC_RXD_EP, cdc_loopback);
         usbd_reg_endpoint(dev, CDC_TXD_EP, cdc_loopback);
-#else
+#elif !defined(CDC_USE_ASYNC)
         usbd_reg_endpoint(dev, CDC_RXD_EP, cdc_rxonly);
         usbd_reg_endpoint(dev, CDC_TXD_EP, cdc_txonly);
-#endif
         usbd_ep_write(dev, CDC_TXD_EP, 0, 0);
+#endif
         return usbd_ack;
     default:
         return usbd_fail;
@@ -285,6 +293,7 @@ static void cdc_init_usbd(void) {
 }
 
 #if defined(CDC_USE_IRQ)
+/* interrupt based code */
 #if defined(STM32L052xx)
     #define USB_HANDLER     USB_IRQHandler
     #define USB_NVIC_IRQ    USB_IRQn
@@ -317,7 +326,29 @@ void main(void) {
         __WFI();
     }
 }
+#elif defined(CDC_USE_ASYNC)
+/* main loop data processing. events will be used for control endpoint only */
+void main(void) {
+    int32_t _t;
+    cdc_init_usbd();
+    usbd_enable(&udev, true);
+    usbd_connect(&udev, true);
+    while(1) {
+        usbd_poll(&udev);
+        if (fpos < (sizeof(fifo) - CDC_DATA_SZ)) {
+            _t = usbd_ep_read(&udev, CDC_RXD_EP, &fifo[fpos], CDC_DATA_SZ);
+            if (_t > 0) fpos += _t;
+        }
+        if (fpos == 0) continue;
+        _t = usbd_ep_write(&udev, CDC_TXD_EP, &fifo[0], (fpos < CDC_DATA_SZ) ? fpos : CDC_DATA_SZ);
+        if (_t > 0) {
+            memmove(&fifo[0], &fifo[_t], fpos - _t);
+            fpos -= _t;
+        }
+    }
+}
 #else
+/* event-based data processing */
 void main(void) {
     cdc_init_usbd();
     usbd_enable(&udev, true);
