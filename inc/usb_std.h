@@ -42,11 +42,11 @@ extern "C" {
 /** Macro to create \ref usb_string_descriptor from array */
 #define USB_ARRAY_DESC(...)        {.bLength = 2 + sizeof((uint16_t[]){__VA_ARGS__}),\
                                     .bDescriptorType = USB_DTYPE_STRING,\
-                                    .wString = (uint16_t*)__VA_ARGS__}
+                                    .wString = {__VA_ARGS__}}
 /** Macro to create \ref usb_string_descriptor from string */
 #define USB_STRING_DESC(s)         {.bLength = sizeof(CAT(u,s)),\
                                     .bDescriptorType = USB_DTYPE_STRING,\
-                                    .wString = (uint16_t*)CAT(u,s)}
+                                    .wString = {CAT(u,s)}}
 
 /**\brief Macro to set мaximum power consumption field for the \ref usb_config_descriptor */
 #define USB_CFG_POWER_MA(mA)        ((mA) >> 1)
@@ -436,7 +436,7 @@ struct usb_endpoint_descriptor {
 struct usb_string_descriptor {
     uint8_t  bLength;               /**<\brief Size of the descriptor, in bytes.*/
     uint8_t  bDescriptorType;       /**<\brief String descriptor type.*/
-    uint16_t* wString;             /**<\brief String data, as unicode characters or array of
+    uint16_t wString[];             /**<\brief String data, as unicode characters or array of
                                      * \ref USB_STD_LANGID codes. */
 } __attribute__((packed));
 
