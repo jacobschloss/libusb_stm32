@@ -311,8 +311,7 @@ static bool set_tx_fifo(uint8_t ep, uint16_t epsize)
 	    for(int i = 0; i < (ep-1); i++)
 	    {
 	        const uint32_t DIEPTXF = OTG->DIEPTXF[i];
-
-	        const uint32_t tx_fifo_depth  = DIEPTXF >> 16;
+	        const uint32_t tx_fifo_depth  = _FLD2VAL(USB_OTG_NPTXFD, DIEPTXF);
 
 	        new_FSA += tx_fifo_depth;
 	    }
@@ -393,15 +392,25 @@ static bool ep_config(uint8_t ep, uint8_t eptype, uint16_t epsize)
 			{
 			    case USB_EPTYPE_ISOCHRONUS:
 			    {
+    	            epi->DIEPCTL = USB_OTG_DIEPCTL_EPENA | USB_OTG_DIEPCTL_CNAK |
+                       (0x01 << 18) | USB_OTG_DIEPCTL_USBAEP |
+                       USB_OTG_DIEPCTL_SD0PID_SEVNFRM |
+                       (ep << 22) | epsize;
 			    	break;
 			    }
 			    case USB_EPTYPE_BULK:
 			    case USB_EPTYPE_BULK | USB_EPTYPE_DBLBUF:
 			    {
+    	            epi->DIEPCTL = USB_OTG_DIEPCTL_SNAK | USB_OTG_DIEPCTL_USBAEP |
+                        (0x02 << 18) | USB_OTG_DIEPCTL_SD0PID_SEVNFRM |
+                        (ep << 22) | epsize;
 			    	break;
 			    }
 			    default:
 			    {
+    	            epi->DIEPCTL = USB_OTG_DIEPCTL_SNAK | USB_OTG_DIEPCTL_USBAEP |
+	                    (0x03 << 18) | USB_OTG_DIEPCTL_SD0PID_SEVNFRM |
+    	                (ep << 22) | epsize;
 			    	break;
 			    }
 			}
@@ -415,15 +424,24 @@ static bool ep_config(uint8_t ep, uint8_t eptype, uint16_t epsize)
 			{
 			    case USB_EPTYPE_ISOCHRONUS:
 			    {
+    	            epo->DOEPCTL = USB_OTG_DOEPCTL_SD0PID_SEVNFRM | USB_OTG_DOEPCTL_CNAK |
+                       USB_OTG_DOEPCTL_EPENA | USB_OTG_DOEPCTL_USBAEP |
+                       (0x01 << 18) | epsize;
 			    	break;
 			    }
 			    case USB_EPTYPE_BULK:
 			    case USB_EPTYPE_BULK | USB_EPTYPE_DBLBUF:
 			    {
+    	            epo->DOEPCTL = USB_OTG_DOEPCTL_SD0PID_SEVNFRM | USB_OTG_DOEPCTL_CNAK |
+                       USB_OTG_DOEPCTL_EPENA | USB_OTG_DOEPCTL_USBAEP |
+                       (0x02 << 18) | epsize;
 			    	break;
 			    }
 			    default:
 			    {
+    	            epo->DOEPCTL = USB_OTG_DOEPCTL_SD0PID_SEVNFRM | USB_OTG_DOEPCTL_CNAK |
+                       USB_OTG_DOEPCTL_EPENA | USB_OTG_DOEPCTL_USBAEP |
+                       (0x03 << 18) | epsize;
 			    	break;
 			    }
 			}
