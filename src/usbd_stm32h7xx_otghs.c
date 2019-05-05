@@ -14,6 +14,10 @@
  * limitations under the License.
  */
 
+//
+//Based on usbd_stm32f429_otghs.c
+//
+
 #include <stdint.h>
 #include <stdbool.h>
 #include "stm32.h"
@@ -287,13 +291,41 @@ static bool set_tx_fifo(uint8_t ep, uint16_t epsize)
     const uint32_t TXF0FD  = DIEPTXF0 >> 16;
     const uint32_t TXF0FSA = DIEPTXF0 & 0x0000FFFF;
 
-    for(int i = 0; i < ep; i++)
-    {
-        const uint32_t DIEPTXF = OTG->DIEPTXF[i];
+	const uint32_t rx_fifo_len = _FLD2VAL(USB_OTG_GRXFSIZ_RXFD, OTG->GRXFSIZ);
+	uint32_t new_FSA = rx_fifo_len;
 
-        const uint32_t FD  = DIEPTXF >> 16;
-        const uint32_t FSA = DIEPTXF & 0x0000FFFF;
-    }
+	//min size of 16 u32
+	const uint32_t epsize32 = MAX((epsize + 3) / 4, 0x10);
+
+	if(ep = 0)
+	{
+	    if((new_FSA + epsize32) > MAX_FIFO_SZ)
+	    {
+	    	return false;
+	    }
+
+		OTG->DIEPTXF0_HNPTXFSIZ = _VAL2FLD(USB_OTG_TX0FD, epsize32) | _VAL2FLD(USB_OTG_TX0FSA, addr);
+	}
+	else
+	{
+	    for(int i = 0; i < (ep-1); i++)
+	    {
+	        const uint32_t DIEPTXF = OTG->DIEPTXF[i];
+
+	        const uint32_t tx_fifo_depth  = DIEPTXF >> 16;
+
+	        new_FSA += tx_fifo_depth;
+	    }
+	
+	    if((new_FSA + epsize32) > MAX_FIFO_SZ)
+	    {
+	    	return false;
+	    }
+
+	    OTG->DIEPTXF[ep-1] = _VAL2FLD(USB_OTG_NPTXFD, epsize32) | _VAL2FLD(USB_OTG_NPTXFSA, addr);
+	}
+
+    return true;
 }
 static bool ep_config(uint8_t ep, uint8_t eptype, uint16_t epsize)
 {
@@ -339,10 +371,62 @@ static bool ep_config(uint8_t ep, uint8_t eptype, uint16_t epsize)
         if(ep & 0x80)
         {
             //tx
+            volatile USB_OTG_INEndpointTypeDef*  epin  = EPIN(ep & 0x7F);
+
+			if ((eptype == USB_EPTYPE_ISOCHRONUS) ||
+			    (eptype == (USB_EPTYPE_BULK | USB_EPTYPE_DBLBUF))) 
+			{
+			    if (!set_tx_fifo(ep, epsize << 1))
+		    	{
+		    		return false;
+		    	}
+			} 
+			else
+			{
+			    if (!set_tx_fifo(ep, epsize))
+		    	{
+		    		return false;
+		    	}
+			}
+
+			switch (eptype)
+			{
+			    case USB_EPTYPE_ISOCHRONUS:
+			    {
+			    	break;
+			    }
+			    case USB_EPTYPE_BULK:
+			    case USB_EPTYPE_BULK | USB_EPTYPE_DBLBUF:
+			    {
+			    	break;
+			    }
+			    default:
+			    {
+			    	break;
+			    }
+			}
         }
         else
         {
             //rx
+            volatile USB_OTG_OUTEndpointTypeDef* epout = EPOUT(ep);
+
+            switch (eptype)
+			{
+			    case USB_EPTYPE_ISOCHRONUS:
+			    {
+			    	break;
+			    }
+			    case USB_EPTYPE_BULK:
+			    case USB_EPTYPE_BULK | USB_EPTYPE_DBLBUF:
+			    {
+			    	break;
+			    }
+			    default:
+			    {
+			    	break;
+			    }
+			}
         }
     }
 
