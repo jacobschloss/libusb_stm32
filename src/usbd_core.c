@@ -17,8 +17,6 @@
 #include <stdbool.h>
 #include "usb.h"
 
-#include "uart1_printf.h"
-
 #define _MIN(a, b) ((a) < (b)) ? (a) : (b)
 
 static void usbd_process_ep0 (usbd_device *dev, uint8_t event, uint8_t ep);
@@ -28,9 +26,6 @@ static void usbd_process_ep0 (usbd_device *dev, uint8_t event, uint8_t ep);
  * \return none
  */
 static void usbd_process_reset(usbd_device *dev) {
-    
-    uart1_printf("usbd_process_reset\r\n");
-
     dev->status.device_state = usbd_state_default;
     dev->status.control_state = usbd_ctl_idle;
     dev->status.device_cfg = 0;
@@ -45,7 +40,6 @@ static void usbd_process_reset(usbd_device *dev) {
  * \return none
  */
 static void usbd_set_address (usbd_device *dev, usbd_ctlreq *req) {
-    uart1_printf("usbd_set_address\r\n");
     dev->driver->setaddr(req->wValue);
     dev->status.device_state = (req->wValue) ? usbd_state_addressed : usbd_state_default;
 }
@@ -84,36 +78,28 @@ static usbd_respond usbd_configure(usbd_device *dev, uint8_t config) {
  * \return TRUE if request is handled
  */
 static usbd_respond usbd_process_devrq (usbd_device *dev, usbd_ctlreq *req) {
-    uart1_printf("usbd_process_devrq\r\n");
     switch (req->bRequest) {
     case USB_STD_CLEAR_FEATURE:
-        uart1_printf("\tUSB_STD_CLEAR_FEATURE\r\n");
         /* not yet supported */
         break;
     case USB_STD_GET_CONFIG:
-        uart1_printf("\tUSB_STD_GET_CONFIG\r\n");
         req->data[0] = dev->status.device_cfg;
         return usbd_ack;
     case USB_STD_GET_DESCRIPTOR:
-        uart1_printf("\tUSB_STD_GET_DESCRIPTOR\r\n");
         if (req->wValue == ((USB_DTYPE_STRING << 8) | INTSERIALNO_DESCRIPTOR )) {
-            uart1_printf("\t\tINTSERIALNO_DESCRIPTOR\r\n");
             dev->status.data_count = dev->driver->get_serialno_desc(req->data);
             return usbd_ack;
         } else {
             if (dev->descriptor_callback) {
-                uart1_printf("\t\tdescriptor_callback\r\n");
                 return dev->descriptor_callback(req, &(dev->status.data_ptr), &(dev->status.data_count));
             }
         }
         break;
     case USB_STD_GET_STATUS:
-        uart1_printf("\tUSB_STD_GET_STATUS\r\n");
         req->data[0] = 0;
         req->data[1] = 0;
         return usbd_ack;
     case USB_STD_SET_ADDRESS:
-        uart1_printf("\tUSB_STD_SET_ADDRESS\r\n");
         if (usbd_getinfo(dev) & USBD_HW_ADDRFST) {
             usbd_set_address(dev, req);
         } else {
@@ -121,13 +107,11 @@ static usbd_respond usbd_process_devrq (usbd_device *dev, usbd_ctlreq *req) {
         }
         return usbd_ack;
     case USB_STD_SET_CONFIG:
-        uart1_printf("\tUSB_STD_SET_CONFIG\r\n");
         return usbd_configure(dev, req->wValue);
     case USB_STD_SET_DESCRIPTOR:
         /* should be externally handled */
         break;
     case USB_STD_SET_FEATURE:
-        uart1_printf("\tUSB_STD_SET_FEATURE\r\n");
         /* not yet supported */
         break;
     default:
@@ -331,18 +315,14 @@ static void usbd_process_eprx(usbd_device *dev, uint8_t ep) {
  * \param event endpoint event
  */
 static void usbd_process_ep0 (usbd_device *dev, uint8_t event, uint8_t ep) {
-    uart1_printf("usbd_process_ep0\r\n");
     switch (event) {
     case usbd_evt_epsetup:
-        uart1_printf("\tusbd_evt_epsetup\r\n");
         /* force switch to setup state */
         dev->status.control_state = usbd_ctl_idle;
         dev->complete_callback = 0;
     case usbd_evt_eprx:
-        uart1_printf("\tusbd_evt_eprx\r\n");
         return usbd_process_eprx(dev, ep);
     case usbd_evt_eptx:
-        uart1_printf("\tusbd_evt_eptx\r\n");
         return usbd_process_eptx(dev, ep);
     default:
         break;
