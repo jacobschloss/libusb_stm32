@@ -286,6 +286,14 @@ static bool set_tx_fifo(uint8_t ep, uint16_t epsize)
     const uint32_t DIEPTXF0 = OTG->DIEPTXF0_HNPTXFSIZ;
     const uint32_t TXF0FD  = DIEPTXF0 >> 16;
     const uint32_t TXF0FSA = DIEPTXF0 & 0x0000FFFF;
+
+    for(int i = 0; i < ep; i++)
+    {
+        const uint32_t DIEPTXF = OTG->DIEPTXF[i];
+
+        const uint32_t FD  = DIEPTXF >> 16;
+        const uint32_t FSA = DIEPTXF & 0x0000FFFF;
+    }
 }
 static bool ep_config(uint8_t ep, uint8_t eptype, uint16_t epsize)
 {
@@ -306,7 +314,25 @@ static bool ep_config(uint8_t ep, uint8_t eptype, uint16_t epsize)
         volatile USB_OTG_INEndpointTypeDef*  epin  = EPIN(0);
         volatile USB_OTG_OUTEndpointTypeDef* epout = EPOUT(0);
 
-        epout->DOEPTSIZ0 = _VAL2FLD(USB_OTG_DOEPTSIZ_STUPCNT, 3);
+        uint32_t mpsize = 0;
+        if (epsize <= 0x08) {
+            epsize = 0x08;
+            mpsize = 0x03;
+        } else if (epsize <= 0x10) {
+            epsize = 0x10;
+            mpsize = 0x02;
+        } else if (epsize <= 0x20) {
+            epsize = 0x20;
+            mpsize = 0x01;
+        } else {
+            epsize = 0x40;
+            mpsize = 0x00;
+        }
+        // epin->DIEPTSIZ
+        epin->DIEPTCTL = USB_OTG_DOEPCTL_SNAK | mpsize;
+
+        epout->DOEPTSIZ = (1 << 29) | (1 << 19) | epsize;
+        epout->DOEPTCTL = USB_OTG_DOEPCTL_CNAK | USB_OTG_DOEPCTL_EPENA | mpsize;
     }
     else
     {
