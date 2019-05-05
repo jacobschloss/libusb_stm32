@@ -162,6 +162,8 @@ static void enable(bool enable)
 
 		//USB HS
 		_BMD(OTGD->DCFG, USB_OTG_DCFG_DSPD, _VAL2FLD(USB_OTG_DCFG_DSPD, 0x00));
+        OTGD->DCFG |= USB_OTG_DCFG_NZLSOHSK;
+
 		// _BMD(OTGD->DCFG, USB_OTG_DCFG_DSPD, _VAL2FLD(USB_OTG_DCFG_DSPD, 0x01));
 
 		Flush_TX(0x10);//Flush all tx fifo
@@ -279,207 +281,121 @@ static void setaddr(uint8_t addr)
 	OTGD->DCFG |= _VAL2FLD(USB_OTG_DCFG_DAD, addr);
 }
 
-//only for ep != 0
 static bool set_tx_fifo(uint8_t ep, uint16_t epsize)
 {
-	const uint32_t DIEPTXF0_HNPTXFSIZ = OTG->DIEPTXF0_HNPTXFSIZ;
-	const uint32_t TX0FD  = DIEPTXF0_HNPTXFSIZ >> 16;
-	const uint32_t TX0FSA = DIEPTXF0_HNPTXFSIZ & 0x0000FFFF;
-
-    //first fifo address availible for ep1
-    uint32_t fsa = TX0FD + TX0FSA;
-
-    //next free address
-    for (int i = 0; i < (ep - 1); i++)
-    {
-        const uint32_t DIEPTXF = OTG->DIEPTXF[i];
-        const uint32_t INEPTXFD = DIEPTXF >> 16;
-        const uint32_t INEPTXSA = DIEPTXF & 0x0000FFFF;
-
-        fsa += INEPTXFD;
-    }
-
-    /* calculating requited TX fifo size */
-    /* getting in 32 bit terms */
-    epsize = (epsize + 0x03) >> 2;
-    /* it must be 16 32-bit words minimum */
-    if (epsize < 0x10) epsize = 0x10;
-    /* checking for the available fifo */
-    if ((fsa + epsize) > MAX_FIFO_SZ) return false;
-    /* programming fifo register */
-    fsa |= (epsize << 16);
-    OTG->DIEPTXF[ep - 1] = fsa;
-    return true;
+    const uint32_t DIEPTXF0 = OTG->DIEPTXF0_HNPTXFSIZ;
+    const uint32_t TXF0FD  = DIEPTXF0 >> 16;
+    const uint32_t TXF0FSA = DIEPTXF0 & 0x0000FFFF;
 }
 static bool ep_config(uint8_t ep, uint8_t eptype, uint16_t epsize)
 {
-	if (ep == 0) {
-        /* configureing control endpoint EP0 */
-        uint32_t mpsize;
-        if (epsize <= 0x08) {
-            epsize = 0x08;
-            mpsize = 0x03;
-        } else if (epsize <= 0x10) {
-            epsize = 0x10;
-            mpsize = 0x02;
-        } else if (epsize <= 0x20) {
-            epsize = 0x20;
-            mpsize = 0x01;
-        } else {
-            epsize = 0x40;
-            mpsize = 0x00;
-        }
-        /* EP0 TX FIFO size is setted on init level */
-        /* enabling RX and TX interrupts from EP0 */
+    if(ep == 0)
+    {
+        //ep0 rx & tx
         OTGD->DAINTMSK |= 0x00010001;
-        /* setting up EP0 TX and RX registers */
 
-        //DIEPTSIZ0
-        EPIN(ep)->DIEPTSIZ  = (1 << 19) | epsize;
-        EPIN(ep)->DIEPCTL = USB_OTG_DIEPCTL_SNAK | mpsize;
+        OTGD->DOEPMSK |= USB_OTG_DOEPMSK_STUPM | USB_OTG_DOEPMSK_XFRCM;
+        OTGD->DIEPMSK |= USB_OTG_DIEPMSK_XFRCM | USB_OTG_DIEPMSK_TOM;
 
-        /* 1 setup packet, 1 packets total */
-        //DOEPTSIZ0
-        EPOUT(ep)->DOEPTSIZ = (1 << 29) | (1 << 19) | epsize;
+        //set rx size
+        OTG->GRXFSIZ = RX_FIFO_SZ;
 
-        //DOEPCTL0
-        EPOUT(ep)->DOEPCTL = USB_OTG_DOEPCTL_EPENA | USB_OTG_DOEPCTL_CNAK | mpsize;
-        return true;
+        //set ep0 start and size
+        OTG->DIEPTXF0_HNPTXFSIZ = _VAL2FLD(USB_OTG_TX0FD, epsize) | _VAL2FLD(USB_OTG_TX0FSA, RX_FIFO_SZ);
+
+        volatile USB_OTG_INEndpointTypeDef*  epin  = EPIN(0);
+        volatile USB_OTG_OUTEndpointTypeDef* epout = EPOUT(0);
+
+        epout->DOEPTSIZ0 = _VAL2FLD(USB_OTG_DOEPTSIZ_STUPCNT, 3);
     }
-    if (ep & 0x80) {
-        ep &= 0x7F;
-        USB_OTG_INEndpointTypeDef* epi = EPIN(ep);
-        /* configuring TX endpoint */
-        /* setting up TX fifo and size register */
-        if ((eptype == USB_EPTYPE_ISOCHRONUS) ||
-            (eptype == (USB_EPTYPE_BULK | USB_EPTYPE_DBLBUF))) {
-            if (!set_tx_fifo(ep, epsize << 1)) return false;
-        } else {
-            if (!set_tx_fifo(ep, epsize)) return false;
+    else
+    {
+        if(ep & 0x80)
+        {
+            //tx
         }
-        /* enabling EP TX interrupt */
-        OTGD->DAINTMSK |= (0x0001UL << ep);
-        /* setting up TX control register*/
-        switch (eptype) {
-        case USB_EPTYPE_ISOCHRONUS:
-            epi->DIEPCTL = USB_OTG_DIEPCTL_EPENA | USB_OTG_DIEPCTL_CNAK |
-                           (0x01 << 18) | USB_OTG_DIEPCTL_USBAEP |
-                           USB_OTG_DIEPCTL_SD0PID_SEVNFRM |
-                           (ep << 22) | epsize;
-            break;
-        case USB_EPTYPE_BULK:
-        case USB_EPTYPE_BULK | USB_EPTYPE_DBLBUF:
-            epi->DIEPCTL = USB_OTG_DIEPCTL_SNAK | USB_OTG_DIEPCTL_USBAEP |
-                            (0x02 << 18) | USB_OTG_DIEPCTL_SD0PID_SEVNFRM |
-                            (ep << 22) | epsize;
-            break;
-        default:
-            epi->DIEPCTL = USB_OTG_DIEPCTL_SNAK | USB_OTG_DIEPCTL_USBAEP |
-                            (0x03 << 18) | USB_OTG_DIEPCTL_SD0PID_SEVNFRM |
-                            (ep << 22) | epsize;
-            break;
-        }
-    } else {
-        /* configuring RX endpoint */
-        USB_OTG_OUTEndpointTypeDef* epo = EPOUT(ep);
-        /* setting up RX control register */
-        switch (eptype) {
-        case USB_EPTYPE_ISOCHRONUS:
-            epo->DOEPCTL = USB_OTG_DOEPCTL_SD0PID_SEVNFRM | USB_OTG_DOEPCTL_CNAK |
-                           USB_OTG_DOEPCTL_EPENA | USB_OTG_DOEPCTL_USBAEP |
-                           (0x01 << 18) | epsize;
-            break;
-        case USB_EPTYPE_BULK | USB_EPTYPE_DBLBUF:
-        case USB_EPTYPE_BULK:
-            epo->DOEPCTL = USB_OTG_DOEPCTL_SD0PID_SEVNFRM | USB_OTG_DOEPCTL_CNAK |
-                           USB_OTG_DOEPCTL_EPENA | USB_OTG_DOEPCTL_USBAEP |
-                           (0x02 << 18) | epsize;
-            break;
-        default:
-            epo->DOEPCTL = USB_OTG_DOEPCTL_SD0PID_SEVNFRM | USB_OTG_DOEPCTL_CNAK |
-                           USB_OTG_DOEPCTL_EPENA | USB_OTG_DOEPCTL_USBAEP |
-                           (0x03 << 18) | epsize;
-            break;
+        else
+        {
+            //rx
         }
     }
+
     return true;
 }
 static void ep_deconfig(uint8_t ep)
 {
-    ep &= 0x7F;
-    volatile USB_OTG_INEndpointTypeDef*  epi = EPIN(ep);
-    volatile USB_OTG_OUTEndpointTypeDef* epo = EPOUT(ep);
-    /* deconfiguring TX part */
-    /* disable interrupt */
-    OTGD->DAINTMSK &= ~(0x00010001 << ep);
-    /* decativating endpoint */
-    _BCL(epi->DIEPCTL, USB_OTG_DIEPCTL_USBAEP);
-    /* flushing FIFO */
-    Flush_TX(ep);
-    /* disabling endpoint */
-    if ((epi->DIEPCTL & USB_OTG_DIEPCTL_EPENA) && (ep != 0)) {
-        epi->DIEPCTL = USB_OTG_DIEPCTL_EPDIS;
-    }
-    /* clean EP interrupts */
-    epi->DIEPINT = 0xFF;
-    /* deconfiguring TX FIFO */
-    if (ep > 0) {
-        OTG->DIEPTXF[ep-1] = 0x02000200 + 0x200 * ep;
-    }
-    /* deconfigureing RX part */
-    _BCL(epo->DOEPCTL, USB_OTG_DOEPCTL_USBAEP);
-    if ((epo->DOEPCTL & USB_OTG_DOEPCTL_EPENA) && (ep != 0)) {
-        epo->DOEPCTL = USB_OTG_DOEPCTL_EPDIS;
-    }
-    epo->DOEPINT = 0xFF;
+
 }
 static int32_t ep_read(uint8_t ep, void* buf, uint16_t blen)
 {
-    int32_t len;
     volatile uint32_t *fifo = EPFIFO(0);
+
     /* no data in RX FIFO */
-    if (!(OTG->GINTSTS & USB_OTG_GINTSTS_RXFLVL)) return -1;
+    if (!(OTG->GINTSTS & USB_OTG_GINTSTS_RXFLVL))
+    {
+        return -1;
+    }
     ep &= 0x7F;
-    if ((OTG->GRXSTSR & USB_OTG_GRXSTSP_EPNUM) != ep) return -1;
-    /* pop data from fifo */
-    len = _FLD2VAL(USB_OTG_GRXSTSP_BCNT, OTG->GRXSTSP);
-    for (unsigned i = 0; i < len; i +=4) {
-        uint32_t _t = *fifo;
-        if (blen >= 4) {
-            *(__attribute__((packed))uint32_t*)buf = _t;
-            blen -= 4;
-            buf += 4;
-        } else {
-            while (blen){
-                *(uint8_t*)buf++ = 0xFF & _t;
-                _t >>= 8;
-                blen --;
+    //wrong ep
+    if ((OTG->GRXSTSR & USB_OTG_GRXSTSP_EPNUM) != ep)
+    {
+        return -1;
+    }
+
+    //pop GRXSTSP
+    const uint32_t GRXSTSP = OTG->GRXSTSP;
+    const uint32_t len = _FLD2VAL(USB_OTG_GRXSTSP_BCNT, GRXSTSP);
+
+    uint32_t* buf32 = (uint32_t*)buf;
+    for(size_t i = 0; i < len; i += 4)
+    {
+        uint32_t x = *fifo;
+        if((len-i) >= 4)
+        {
+            buf32[i] = x;
+        }
+        else
+        {
+            uint8_t* buf8 = ((uint8_t*)buf);
+            for(size_t j = i; j < len; j++)
+            {
+                buf8[j] = x & 0x000000FF;
+                x >>= 8;
             }
         }
     }
+
     return len;
 }
 static int32_t ep_write(uint8_t ep, void *buf, uint16_t blen)
 {
-    ep &= 0x7F;
-    volatile uint32_t* _fifo = EPFIFO(ep);
+    volatile uint32_t* fifo = EPFIFO(ep);
     volatile USB_OTG_INEndpointTypeDef* epi = EPIN(ep);
-    /* transfer data size in 32-bit words */
-    uint32_t  _len = (blen + 3) >> 2;
-    /* no enough space in TX fifo */
-    if (_len > _FLD2VAL(USB_OTG_DTXFSTS_INEPTFSAV, epi->DTXFSTS)) return -1;
-    if (ep != 0 && epi->DIEPCTL & USB_OTG_DIEPCTL_EPENA) {
+
+    const uint32_t len32 = (blen + 3) / 4;
+
+    if(len32 > _FLD2VAL(USB_OTG_DTXFSTS_INEPTFSAV, epi->DTXFSTS))
+    {
         return -1;
     }
+    if((ep != 0) && (epi->DIEPCTL & USB_OTG_DIEPCTL_EPENA))
+    {
+        return -1;
+    }
+
     _BMD(epi->DIEPTSIZ,
          USB_OTG_DIEPTSIZ_PKTCNT | USB_OTG_DIEPTSIZ_MULCNT | USB_OTG_DIEPTSIZ_XFRSIZ,
          _VAL2FLD(USB_OTG_DIEPTSIZ_PKTCNT, 1) | _VAL2FLD(USB_OTG_DIEPTSIZ_MULCNT, 1 ) | _VAL2FLD(USB_OTG_DIEPTSIZ_XFRSIZ, blen));
-    _BMD(epi->DIEPCTL, USB_OTG_DIEPCTL_STALL, USB_OTG_DIEPCTL_CNAK);
-    _BST(epi->DIEPCTL, USB_OTG_DIEPCTL_EPENA);
-    while (_len--) {
-        *_fifo = *(__attribute__((packed)) uint32_t*)buf;
-        buf += 4;
+    _BMD(epi->DIEPCTL, USB_OTG_DIEPCTL_STALL, USB_OTG_DOEPCTL_CNAK);
+    _BST(epi->DIEPCTL, USB_OTG_DOEPCTL_EPENA);
+
+    //TODO: this may over-read buf by up to 3 bytes, which could cause an mpu or other bus exception
+    uint32_t* ptr32 = (uint32_t*)buf;
+    for(size_t i = 0; i < len32; i++)
+    {
+        *fifo = ptr32[i];
     }
+
     return blen;
 }
 static uint16_t get_frame(void)
@@ -488,72 +404,94 @@ static uint16_t get_frame(void)
 }
 static void evt_poll(usbd_device *dev, usbd_evt_callback callback)
 {
-    uint32_t evt;
+    uint32_t evt = 0;
     uint32_t ep = 0;
-    while (1) {
-        uint32_t _t = OTG->GINTSTS;
-        /* bus RESET event */
-        if (_t & USB_OTG_GINTSTS_USBRST) {
+
+    while(true)
+    {    
+        const uint32_t GINTSTS = OTG->GINTSTS;
+        if(GINTSTS & USB_OTG_GINTSTS_USBRST)
+        {
             OTG->GINTSTS = USB_OTG_GINTSTS_USBRST | USB_OTG_GINTSTS_RSTDET;
-            for (uint8_t i = 0; i < MAX_EP; i++ ) {
+            for (uint8_t i = 0; i < MAX_EP; i++ )
+            {
                 ep_deconfig(i);
             }
             Flush_RX();
             continue;
-        } else if (_t & USB_OTG_GINTSTS_ENUMDNE) {
+        }
+        else if(GINTSTS & USB_OTG_GINTSTS_ENUMDNE)
+        {
             OTG->GINTSTS = USB_OTG_GINTSTS_ENUMDNE;
             evt = usbd_evt_reset;
-        } else if (_t & USB_OTG_GINTSTS_IEPINT) {
-            for (;; ep++) {
-                USB_OTG_INEndpointTypeDef* epi = EPIN(ep);
-                if (ep >= MAX_EP) return;
-                if (epi->DIEPINT & USB_OTG_DIEPINT_XFRC) {
+        }
+        else if(USB_OTG_GINTSTS_IEPINT)
+        {
+            for(size_t i = 0; i <= MAX_EP; i++)
+            {
+                volatile USB_OTG_INEndpointTypeDef* epi = EPIN(ep);
+                if (epi->DIEPINT & USB_OTG_DIEPINT_XFRC)
+                {
                     _BST(epi->DIEPINT, USB_OTG_DIEPINT_XFRC);
                     evt = usbd_evt_eptx;
                     ep |= 0x80;
                     break;
                 }
             }
-        } else if (_t & USB_OTG_GINTSTS_RXFLVL) {
-            _t = OTG->GRXSTSR;
-            ep = _t & USB_OTG_GRXSTSP_EPNUM;
-            switch (_FLD2VAL(USB_OTG_GRXSTSP_PKTSTS, _t)) {
-            case 0x02:  /* OUT recieved */
-                evt = usbd_evt_eprx;
-                break;
-            case 0x06:  /* SETUP recieved */
-                /* flushing TX if something stuck in control endpoint */
-                if (EPIN(ep)->DIEPTSIZ & USB_OTG_DIEPTSIZ_PKTCNT) {
-                    Flush_TX(ep);
-                }
-                evt = usbd_evt_epsetup;
-                break;
-            case 0x03:  /* OUT completed */
-            case 0x04:  /* SETUP completed */
-                _BST(EPOUT(ep)->DOEPCTL, USB_OTG_DOEPCTL_CNAK | USB_OTG_DOEPCTL_EPENA);
-            default:
-                /* pop GRXSTSP */
-                OTG->GRXSTSP;
-                continue;
-            }
-#if !defined(USBD_SOF_DISABLED)
-        } else if (_t & USB_OTG_GINTSTS_SOF) {
-            OTG->GINTSTS = USB_OTG_GINTSTS_SOF;
-            evt = usbd_evt_sof;
-#endif
-        } else if (_t & USB_OTG_GINTSTS_USBSUSP) {
-            evt = usbd_evt_susp;
-            OTG->GINTSTS = USB_OTG_GINTSTS_USBSUSP;
-        } else if(_t & USB_OTG_GINTSTS_ESUSP) {
-			OTG->GINTSTS = USB_OTG_GINTSTS_ESUSP;
-			continue;
-    	} else if (_t & USB_OTG_GINTSTS_WKUINT) {
-            OTG->GINTSTS = USB_OTG_GINTSTS_WKUINT;
-            evt = usbd_evt_wkup;
-        } else {
-            /* no more supported events */
             return;
         }
+        else if(USB_OTG_GINTSTS_RXFLVL)
+        {
+            const uint32_t GRXSTSR = OTG->GRXSTSR;
+            ep = GRXSTSR & USB_OTG_GRXSTSP_EPNUM;
+            switch(_FLD2VAL(USB_OTG_GRXSTSP_PKTSTS, GRXSTSR))
+            {
+                case 0x02: // OUT rx
+                {
+                    evt = usbd_evt_eprx;
+                    break;
+                }
+                case 0x06: // SETUP rx
+                {
+                    evt = usbd_evt_epsetup;
+                    break;
+                }
+                case 0x03: //OUT Complete
+                case 0x04: //SETUP Complete
+                {
+                    _BST(EPOUT(ep)->DOEPCTL, USB_OTG_DOEPCTL_CNAK | USB_OTG_DOEPCTL_EPENA);
+                }
+                default:
+                {
+                    //force a read
+                    volatile uint32_t GRXSTSR = OTG->GRXSTSR;
+                    continue;
+                }
+            }
+        }
+#if !defined(USBD_SOF_DISABLED)
+        else if(USB_OTG_GINTSTS_SOF)
+        {
+            OTG->GINTSTS = USB_OTG_GINTSTS_SOF;
+            evt = usbd_evt_sof;
+        }
+#endif
+        else if(USB_OTG_GINTSTS_USBSUSP)
+        {
+            OTG->GINTSTS = USB_OTG_GINTSTS_USBSUSP;
+            evt = usbd_evt_susp;
+        }
+        else if(USB_OTG_GINTSTS_ESUSP)
+        {
+            OTG->GINTSTS = USB_OTG_GINTSTS_ESUSP;
+            continue;
+        }
+        else if(USB_OTG_GINTSTS_WKUINT)
+        {
+            OTG->GINTSTS = USB_OTG_GINTSTS_WKUINT;
+            evt = usbd_evt_wkup;
+        }
+        
         return callback(dev, evt, ep);
     }
 }
