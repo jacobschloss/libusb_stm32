@@ -38,6 +38,9 @@ static volatile USB_OTG_GlobalTypeDef* const OTG  = (void*)(USB_OTG_HS_PERIPH_BA
 static volatile USB_OTG_DeviceTypeDef* const OTGD = (void*)(USB_OTG_HS_PERIPH_BASE + USB_OTG_DEVICE_BASE);
 static volatile uint32_t * const OTGPCTL  = (void*)(USB_OTG_HS_PERIPH_BASE + USB_OTG_PCGCCTL_BASE);
 
+static bool set_tx_fifo(uint8_t ep, uint16_t epsize);
+static bool ep_config(uint8_t ep, uint8_t eptype, uint16_t epsize);
+
 static inline volatile uint32_t* EPFIFO(uint8_t ep)
 {
 	return (volatile uint32_t*)(USB1_OTG_HS_PERIPH_BASE + USB_OTG_FIFO_BASE + (ep * USB_OTG_FIFO_SIZE));
@@ -140,97 +143,38 @@ static void enable(bool enable)
 		//wait for USB1 to be idle
 		_WBS(OTG->GRSTCTL, USB_OTG_GRSTCTL_AHBIDL);
 
-		//No PD, no internal tranciever
-		OTG->GCCFG = 0;
-
-		_BCL(OTG->GUSBCFG, USB_OTG_GUSBCFG_TSDPS | USB_OTG_GUSBCFG_ULPIFSLS | USB_OTG_GUSBCFG_PHYSEL);
+        //soft reset
+        _BST(OTG->GRSTCTL, USB_OTG_GRSTCTL_CSRST);
+        _WBC(OTG->GRSTCTL, USB_OTG_GRSTCTL_CSRST);
 
 		OTG->GUSBCFG = USB_OTG_GUSBCFG_FDMOD                 | 
 		               //USB_OTG_GUSBCFG_ULPIIPD               |
 		               _VAL2FLD(USB_OTG_GUSBCFG_TRDT,  0x09) |
 		               _VAL2FLD(USB_OTG_GUSBCFG_TOCAL, 0x01) ;
 
-
-		//soft reset
-		_BST(OTG->GRSTCTL, USB_OTG_GRSTCTL_CSRST);
-		_WBC(OTG->GRSTCTL, USB_OTG_GRSTCTL_CSRST);
-
-		//reset fifo assignments
-		for (size_t i = 0; i < 15; i++)
-		{
-			OTG->DIEPTXF[i] = 0;
-		}
+		//No PD, no internal tranciever
+		OTG->GCCFG &= ~(USB_OTG_GCCFG_VBDEN);
 
 		//start clocks, no sleep gate
 		*OTGPCTL = 0;
 
+        //soft disconnect
+        _BST(OTGD->DCTL, USB_OTG_DCTL_SDIS);
+
 		//USB HS
-		_BMD(OTGD->DCFG, USB_OTG_DCFG_DSPD, _VAL2FLD(USB_OTG_DCFG_DSPD, 0x00));//USB HS
-		// _BMD(OTGD->DCFG, USB_OTG_DCFG_DSPD, _VAL2FLD(USB_OTG_DCFG_DSPD, 0x01));//HSB FS
+		// _BMD(OTGD->DCFG, USB_OTG_DCFG_DSPD, _VAL2FLD(USB_OTG_DCFG_DSPD, 0x00));//USB HS
+		//_BMD(OTGD->DCFG, USB_OTG_DCFG_DSPD, _VAL2FLD(USB_OTG_DCFG_DSPD, 0x01));//HSB FS
         // _BMD(OTGD->DCFG, USB_OTG_DCFG_DSPD, _VAL2FLD(USB_OTG_DCFG_DSPD, 0x03));//USB FS INT
-        OTGD->DCFG |= USB_OTG_DCFG_NZLSOHSK;
+        //OTGD->DCFG |= USB_OTG_DCFG_NZLSOHSK;
 
+        _BMD(OTGD->DCFG, USB_OTG_DCFG_PERSCHIVL | USB_OTG_DCFG_DSPD,
+             _VAL2FLD(USB_OTG_DCFG_PERSCHIVL, 0) | _VAL2FLD(USB_OTG_DCFG_DSPD, 0x00));
 
-		Flush_TX(0x10);//Flush all tx fifo
-		Flush_RX();
-	
-		OTGD->DIEPMSK = 0U;
-		OTGD->DOEPMSK = 0U;
-		OTGD->DAINTMSK = 0U;
-
-		//soft disconnect
-		_BST(OTGD->DCTL, USB_OTG_DCTL_SDIS);
-
-		for(size_t i = 0; i < MAX_EP; i++)
-		{
-			if(EPIN(i)->DIEPCTL & USB_OTG_DIEPCTL_EPENA)
-			{
-				if(i == 0)
-				{
-					EPIN(i)->DIEPCTL = USB_OTG_DIEPCTL_SNAK;
-				}
-				else
-				{
-					EPIN(i)->DIEPCTL = USB_OTG_DIEPCTL_EPDIS | USB_OTG_DIEPCTL_SNAK;	
-				}
-			}
-			else
-			{
-				EPIN(i)->DIEPCTL = 0;
-			}
-
-			EPIN(i)->DIEPTSIZ = 0;
-			EPIN(i)->DIEPINT = 0x0000FFFF;
-		}
-
-		for(size_t i = 0; i < MAX_EP; i++)
-		{
-			if(EPOUT(i)->DOEPCTL & USB_OTG_DOEPCTL_EPENA)
-			{
-				if(i == 0)
-				{
-					EPOUT(i)->DOEPCTL = USB_OTG_DOEPCTL_SNAK;
-				}
-				else
-				{
-					EPOUT(i)->DOEPCTL = USB_OTG_DOEPCTL_EPDIS | USB_OTG_DOEPCTL_SNAK;	
-				}
-			}
-			else
-			{
-				EPOUT(i)->DOEPCTL = 0;
-			}
-
-			EPOUT(i)->DOEPTSIZ = 0;
-			EPOUT(i)->DOEPINT = 0x0000FFFF;
-		}
-
-		//rx fifo
+        /* setting max RX FIFO size */
         OTG->GRXFSIZ = RX_FIFO_SZ;
-		//ep0 tx fifo 64 byte
-        OTG->DIEPTXF0_HNPTXFSIZ = (0x10 << 16) | RX_FIFO_SZ;
-        
-        //ep tx interrupt
+        /* setting up EP0 TX FIFO SZ as 64 byte */
+        OTG->DIEPTXF0_HNPTXFSIZ = RX_FIFO_SZ | (0x10 << 16);
+        /* unmask EP interrupts */
         OTGD->DIEPMSK = USB_OTG_DIEPMSK_XFRCM;
 
 		//clear core interrupt
@@ -543,11 +487,22 @@ static int32_t ep_write(uint8_t ep, void *buf, uint16_t blen)
         return -1;
     }
 
-    _BMD(epi->DIEPTSIZ,
-         USB_OTG_DIEPTSIZ_PKTCNT | USB_OTG_DIEPTSIZ_MULCNT | USB_OTG_DIEPTSIZ_XFRSIZ,
-         _VAL2FLD(USB_OTG_DIEPTSIZ_PKTCNT, 1) | _VAL2FLD(USB_OTG_DIEPTSIZ_MULCNT, 1 ) | _VAL2FLD(USB_OTG_DIEPTSIZ_XFRSIZ, blen));
-    _BMD(epi->DIEPCTL, USB_OTG_DIEPCTL_STALL, USB_OTG_DOEPCTL_CNAK);
-    _BST(epi->DIEPCTL, USB_OTG_DOEPCTL_EPENA);
+    if((ep & 0x7F) == 0)
+    {
+        _BMD(epi->DIEPTSIZ,
+             USB_OTG_DIEPTSIZ_PKTCNT | USB_OTG_DIEPTSIZ_XFRSIZ,
+             _VAL2FLD(USB_OTG_DIEPTSIZ_PKTCNT, 1) | _VAL2FLD(USB_OTG_DIEPTSIZ_XFRSIZ, blen));
+        _BMD(epi->DIEPCTL, USB_OTG_DIEPCTL_STALL, USB_OTG_DOEPCTL_CNAK);
+        _BST(epi->DIEPCTL, USB_OTG_DOEPCTL_EPENA);
+    }
+    else
+    {
+        _BMD(epi->DIEPTSIZ,
+             USB_OTG_DIEPTSIZ_PKTCNT | USB_OTG_DIEPTSIZ_MULCNT | USB_OTG_DIEPTSIZ_XFRSIZ,
+             _VAL2FLD(USB_OTG_DIEPTSIZ_PKTCNT, 1) | _VAL2FLD(USB_OTG_DIEPTSIZ_MULCNT, 1 ) | _VAL2FLD(USB_OTG_DIEPTSIZ_XFRSIZ, blen));
+        _BMD(epi->DIEPCTL, USB_OTG_DIEPCTL_STALL, USB_OTG_DOEPCTL_CNAK);
+        _BST(epi->DIEPCTL, USB_OTG_DOEPCTL_EPENA);
+    }
 
     //TODO: this may over-read buf by up to 3 bytes, which could cause an mpu or other bus exception
     uint32_t* ptr32 = (uint32_t*)buf;
@@ -678,7 +633,7 @@ static uint16_t get_serialno_desc(void *buffer)
 	}
 
 	dsc->bDescriptorType = USB_DTYPE_STRING;
-	dsc->bLength = 24;
+	dsc->bLength = 18;
 
 	return dsc->bLength;
 }
