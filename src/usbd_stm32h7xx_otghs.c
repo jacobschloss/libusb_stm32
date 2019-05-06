@@ -165,10 +165,11 @@ static void enable(bool enable)
 		*OTGPCTL = 0;
 
 		//USB HS
-		_BMD(OTGD->DCFG, USB_OTG_DCFG_DSPD, _VAL2FLD(USB_OTG_DCFG_DSPD, 0x00));
+		_BMD(OTGD->DCFG, USB_OTG_DCFG_DSPD, _VAL2FLD(USB_OTG_DCFG_DSPD, 0x00));//USB HS
+		// _BMD(OTGD->DCFG, USB_OTG_DCFG_DSPD, _VAL2FLD(USB_OTG_DCFG_DSPD, 0x01));//HSB FS
+        // _BMD(OTGD->DCFG, USB_OTG_DCFG_DSPD, _VAL2FLD(USB_OTG_DCFG_DSPD, 0x03));//USB FS INT
         OTGD->DCFG |= USB_OTG_DCFG_NZLSOHSK;
 
-		// _BMD(OTGD->DCFG, USB_OTG_DCFG_DSPD, _VAL2FLD(USB_OTG_DCFG_DSPD, 0x01));
 
 		Flush_TX(0x10);//Flush all tx fifo
 		Flush_RX();
@@ -242,7 +243,7 @@ static void enable(bool enable)
                         USB_OTG_GINTMSK_USBSUSPM |
                         USB_OTG_GINTMSK_ESUSPM   |
 #if !defined(USBD_SOF_DISABLED)
-                        //USB_OTG_GINTMSK_SOFM    
+                        USB_OTG_GINTMSK_SOFM     |
 #endif
                         USB_OTG_GINTMSK_WUIM     |
                         USB_OTG_GINTMSK_IEPINT   |
@@ -282,7 +283,7 @@ static uint8_t connect(bool connect)
 }
 static void setaddr(uint8_t addr)
 {
-	OTGD->DCFG |= _VAL2FLD(USB_OTG_DCFG_DAD, addr);
+    _BMD(OTGD->DCFG, USB_OTG_DCFG_DAD, _VAL2FLD(USB_OTG_DCFG_DAD, addr));
 }
 
 static bool set_tx_fifo(uint8_t ep, uint16_t epsize)
