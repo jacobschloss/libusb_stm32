@@ -584,7 +584,7 @@ static void evt_poll(usbd_device *dev, usbd_evt_callback callback)
             OTG->GINTSTS = USB_OTG_GINTSTS_ENUMDNE;
             evt = usbd_evt_reset;
         }
-        else if(USB_OTG_GINTSTS_IEPINT)
+        else if(GINTSTS & USB_OTG_GINTSTS_IEPINT)
         {
             for(size_t i = 0; i <= MAX_EP; i++)
             {
@@ -597,9 +597,8 @@ static void evt_poll(usbd_device *dev, usbd_evt_callback callback)
                     break;
                 }
             }
-            return;
         }
-        else if(USB_OTG_GINTSTS_RXFLVL)
+        else if(GINTSTS & USB_OTG_GINTSTS_RXFLVL)
         {
             const uint32_t GRXSTSR = OTG->GRXSTSR;
             ep = GRXSTSR & USB_OTG_GRXSTSP_EPNUM;
@@ -612,6 +611,10 @@ static void evt_poll(usbd_device *dev, usbd_evt_callback callback)
                 }
                 case 0x06: // SETUP rx
                 {
+                    if(EPIN(ep)->DIEPTSIZ & USB_OTG_DIEPTSIZ_PKTCNT)
+                    {
+                       Flush_TX(ep);
+                    }
                     evt = usbd_evt_epsetup;
                     break;
                 }
@@ -623,29 +626,29 @@ static void evt_poll(usbd_device *dev, usbd_evt_callback callback)
                 default:
                 {
                     //force a read
-                    volatile uint32_t GRXSTSR = OTG->GRXSTSR;
+                    volatile uint32_t GRXSTSP = OTG->GRXSTSP;
                     continue;
                 }
             }
         }
 #if !defined(USBD_SOF_DISABLED)
-        else if(USB_OTG_GINTSTS_SOF)
+        else if(GINTSTS & USB_OTG_GINTSTS_SOF)
         {
             OTG->GINTSTS = USB_OTG_GINTSTS_SOF;
             evt = usbd_evt_sof;
         }
 #endif
-        else if(USB_OTG_GINTSTS_USBSUSP)
+        else if(GINTSTS & USB_OTG_GINTSTS_USBSUSP)
         {
             OTG->GINTSTS = USB_OTG_GINTSTS_USBSUSP;
             evt = usbd_evt_susp;
         }
-        else if(USB_OTG_GINTSTS_ESUSP)
+        else if(GINTSTS & USB_OTG_GINTSTS_ESUSP)
         {
             OTG->GINTSTS = USB_OTG_GINTSTS_ESUSP;
             continue;
         }
-        else if(USB_OTG_GINTSTS_WKUINT)
+        else if(GINTSTS & USB_OTG_GINTSTS_WKUINT)
         {
             OTG->GINTSTS = USB_OTG_GINTSTS_WKUINT;
             evt = usbd_evt_wkup;
